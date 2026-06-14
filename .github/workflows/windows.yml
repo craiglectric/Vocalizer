@@ -1,0 +1,111 @@
+# Vocalizer — Windows (VST3) build.
+#
+# STATUS: UNVERIFIED first cut. The macOS build is the proven one; this Windows
+# pipeline was authored without a Windows test loop and will almost certainly
+# need an iteration pass (espeak-ng MSVC build flags / the *WithTerminator export,
+# onnxruntime version, DLL bundling). See WINDOWS.md. Output is UNSIGNED.
+name: windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "Source/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/windows.yml"
+      - "scripts/bundle_fixup_win.ps1"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      ORT_VERSION: "1.14.1"   # must match the onnxruntime the engine expects
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- onnxruntime (Windows x64 prebuilt, MIT) -> ThirdParty/onnxruntime-win-x64
+      - name: Provision onnxruntime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/onnxruntime-win-x64-$env:ORT_VERSION.zip"
+          Invoke-WebRequest $url -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath ort_tmp -Force
+          $src = Get-ChildItem ort_tmp -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path ThirdParty/onnxruntime-win-x64 | Out-Null
+          Copy-Item "$($src.FullName)/lib"     ThirdParty/onnxruntime-win-x64/lib     -Recurse -Force
+          Copy-Item "$($src.FullName)/include" ThirdParty/onnxruntime-win-x64/include -Recurse -Force
+
+      # --- espeak-ng (rhasspy fork, GPLv3) -> ThirdParty/espeak-ng-install-win
+      # Same options as scripts/build_espeak_ng.sh (no audio backends; exports
+      # espeak_TextToPhonemesWithTerminator that the vendored piper source needs).
+      - name: Build espeak-ng
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Invoke-WebRequest "https://github.com/rhasspy/espeak-ng/archive/refs/heads/master.zip" -OutFile espeak.zip
+          Expand-Archive espeak.zip -DestinationPath . -Force
+          $src = "espeak-ng-master"
+          $install = "$pwd/ThirdParty/espeak-ng-install-win"
+          cmake -S $src -B "$src/build" `
+            -DBUILD_SHARED_LIBS=ON `
+            -DUSE_ASYNC=OFF -DUSE_MBROLA=OFF -DUSE_LIBSONIC=OFF -DUSE_LIBPCAUDIO=OFF `
+            -DUSE_KLATT=OFF -DUSE_SPEECHPLAYER=OFF -DEXTRA_cmn=ON -DEXTRA_ru=ON `
+            -DCMAKE_INSTALL_PREFIX="$install"
+          cmake --build "$src/build" --config Release --target install
+          # Some espeak-ng versions install the import lib under a Release/ subdir or
+          # name it espeak-ng.lib in lib/ — normalise so CMake finds bin/lib as expected.
+          Get-ChildItem -Recurse "$install" -Filter "espeak-ng*.dll" | ForEach-Object { Write-Host "dll: $($_.FullName)" }
+          Get-ChildItem -Recurse "$install" -Filter "espeak-ng*.lib" | ForEach-Object { Write-Host "lib: $($_.FullName)" }
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build (VST3)
+        shell: pwsh
+        run: cmake --build build --config Release --target Vocalizer_VST3
+
+      # --- Package an UNSIGNED installer (Inno Setup) ------------------------
+      - name: Package (Inno Setup)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vst3 = Get-ChildItem -Path build -Recurse -Directory -Filter "Vocalizer.vst3" |
+                  Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
+          if (-not $vst3) { throw "Vocalizer.vst3 not found" }
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          $iss = @(
+            '[Setup]',
+            'AppId=com.rathound.Vocalizer',
+            'AppName=Vocalizer',
+            'AppVersion=0.1.0',
+            'AppPublisher=RatHound',
+            'DefaultDirName={commoncf64}\VST3',
+            'DisableDirPage=yes',
+            'DisableProgramGroupPage=yes',
+            'ArchitecturesInstallIn64BitMode=x64compatible',
+            'ArchitecturesAllowed=x64compatible',
+            'OutputDir=out',
+            'OutputBaseFilename=Vocalizer-Windows',
+            'Compression=lzma2',
+            'SolidCompression=yes',
+            '',
+            '[Files]',
+            "Source: `"$($vst3.FullName)\*`"; DestDir: `"{commoncf64}\VST3\Vocalizer.vst3`"; Flags: recursesubdirs createallsubdirs ignoreversion"
+          )
+          $iss | Set-Content -Path installer.iss -Encoding ascii
+          & $iscc installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vocalizer-Windows
+          if-no-files-found: warn
+          path: |
+            build/**/Vocalizer.vst3
+            out/*.exe

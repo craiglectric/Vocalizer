@@ -29,21 +29,45 @@ FetchContent_MakeAvailable(JUCE)
 # ThirdParty/piper-phonemize still provides the piper headers + uni_algo.h.
 #==============================================================================
 set(PP_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/piper-phonemize)
-set(ORT_DIR    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/onnxruntime-arm64)
-set(ESPEAK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/espeak-ng-install)
-# espeak-ng (rhasspy fork) is built from source by scripts/build_espeak_ng.sh
-# with the same options piper expects (no pcaudio; exports the *WithTerminator
-# entry point). It ships libespeak-ng.dylib + libucd.dylib (both @rpath) + data.
 
-add_library(onnxruntime SHARED IMPORTED)
-set_target_properties(onnxruntime PROPERTIES
-    IMPORTED_LOCATION ${ORT_DIR}/lib/libonnxruntime.1.14.1.dylib
-    INTERFACE_INCLUDE_DIRECTORIES ${ORT_DIR}/include)
+if(APPLE)
+    # macOS arm64 — the proven, shipping configuration (unchanged).
+    set(ORT_DIR    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/onnxruntime-arm64)
+    set(ESPEAK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/espeak-ng-install)
+    # espeak-ng (rhasspy fork) is built from source by scripts/build_espeak_ng.sh
+    # with the same options piper expects (no pcaudio; exports the *WithTerminator
+    # entry point). It ships libespeak-ng.dylib + libucd.dylib (both @rpath) + data.
+    add_library(onnxruntime SHARED IMPORTED)
+    set_target_properties(onnxruntime PROPERTIES
+        IMPORTED_LOCATION ${ORT_DIR}/lib/libonnxruntime.1.14.1.dylib
+        INTERFACE_INCLUDE_DIRECTORIES ${ORT_DIR}/include)
 
-add_library(espeak-ng SHARED IMPORTED)
-set_target_properties(espeak-ng PROPERTIES
-    IMPORTED_LOCATION ${ESPEAK_DIR}/lib/libespeak-ng.dylib
-    INTERFACE_INCLUDE_DIRECTORIES ${ESPEAK_DIR}/include)
+    add_library(espeak-ng SHARED IMPORTED)
+    set_target_properties(espeak-ng PROPERTIES
+        IMPORTED_LOCATION ${ESPEAK_DIR}/lib/libespeak-ng.dylib
+        INTERFACE_INCLUDE_DIRECTORIES ${ESPEAK_DIR}/include)
+elseif(WIN32)
+    # Windows x64 — UNVERIFIED scaffold (see WINDOWS.md). CI
+    # (.github/workflows/windows.yml) provisions these dirs:
+    #   ThirdParty/onnxruntime-win-x64   : lib/onnxruntime.{dll,lib} + include
+    #   ThirdParty/espeak-ng-install-win : bin/espeak-ng.dll + lib/espeak-ng.lib
+    #                                      + include + share/espeak-ng-data
+    set(ORT_DIR    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/onnxruntime-win-x64)
+    set(ESPEAK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/espeak-ng-install-win)
+    add_library(onnxruntime SHARED IMPORTED)
+    set_target_properties(onnxruntime PROPERTIES
+        IMPORTED_LOCATION ${ORT_DIR}/lib/onnxruntime.dll
+        IMPORTED_IMPLIB   ${ORT_DIR}/lib/onnxruntime.lib
+        INTERFACE_INCLUDE_DIRECTORIES ${ORT_DIR}/include)
+
+    add_library(espeak-ng SHARED IMPORTED)
+    set_target_properties(espeak-ng PROPERTIES
+        IMPORTED_LOCATION ${ESPEAK_DIR}/bin/espeak-ng.dll
+        IMPORTED_IMPLIB   ${ESPEAK_DIR}/lib/espeak-ng.lib
+        INTERFACE_INCLUDE_DIRECTORIES ${ESPEAK_DIR}/include)
+else()
+    message(FATAL_ERROR "Vocalizer: unsupported platform (only macOS + Windows).")
+endif()
 
 # piper-phonemize compiled in (the two functions we use: phonemize_eSpeak +
 # phonemes_to_ids). Consumers add these sources + include dirs.
@@ -146,21 +170,37 @@ function(vocalizer_self_contain fmt installSubdir)
         return()
     endif()
 
-    # The format binary must find its sibling dylibs via @loader_path.
-    set_target_properties(${fmt} PROPERTIES BUILD_RPATH "@loader_path")
+    if(APPLE)
+        # The format binary must find its sibling dylibs via @loader_path.
+        set_target_properties(${fmt} PROPERTIES BUILD_RPATH "@loader_path")
 
-    add_custom_command(TARGET ${fmt} POST_BUILD VERBATIM
-        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/bundle_fixup.sh"
-            "$<TARGET_BUNDLE_DIR:${fmt}>"
-            "$<TARGET_FILE_DIR:${fmt}>"
-            "$<TARGET_BUNDLE_CONTENT_DIR:${fmt}>/Resources"
-            "${ORT_DIR}/lib/libonnxruntime.1.14.1.dylib"
-            "${ESPEAK_DIR}/lib/libespeak-ng.dylib"
-            "${ESPEAK_DIR}/lib/libucd.dylib"
-            "${ESPEAK_DIR}/share/espeak-ng-data"
-            "${VOCALIZER_VOICES_DIR}"
-            "$ENV{HOME}/Library/Audio/Plug-Ins/${installSubdir}/$<TARGET_BUNDLE_DIR_NAME:${fmt}>"
-        COMMENT "Self-containing + installing ${fmt}")
+        add_custom_command(TARGET ${fmt} POST_BUILD VERBATIM
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/bundle_fixup.sh"
+                "$<TARGET_BUNDLE_DIR:${fmt}>"
+                "$<TARGET_FILE_DIR:${fmt}>"
+                "$<TARGET_BUNDLE_CONTENT_DIR:${fmt}>/Resources"
+                "${ORT_DIR}/lib/libonnxruntime.1.14.1.dylib"
+                "${ESPEAK_DIR}/lib/libespeak-ng.dylib"
+                "${ESPEAK_DIR}/lib/libucd.dylib"
+                "${ESPEAK_DIR}/share/espeak-ng-data"
+                "${VOCALIZER_VOICES_DIR}"
+                "$ENV{HOME}/Library/Audio/Plug-Ins/${installSubdir}/$<TARGET_BUNDLE_DIR_NAME:${fmt}>"
+            COMMENT "Self-containing + installing ${fmt}")
+    elseif(WIN32)
+        # Windows: copy the DLLs next to the binary (Contents/x86_64-win) and the
+        # espeak data + voices into Contents/Resources. UNVERIFIED — see WINDOWS.md.
+        # Windows finds DLLs in the loading binary's own directory, so no rpath.
+        add_custom_command(TARGET ${fmt} POST_BUILD VERBATIM
+            COMMAND pwsh -NoProfile -File
+                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/bundle_fixup_win.ps1"
+                "-BinaryDir"   "$<TARGET_FILE_DIR:${fmt}>"
+                "-ResourcesDir" "$<TARGET_BUNDLE_CONTENT_DIR:${fmt}>/Resources"
+                "-OnnxDll"     "${ORT_DIR}/lib/onnxruntime.dll"
+                "-EspeakDll"   "${ESPEAK_DIR}/bin/espeak-ng.dll"
+                "-EspeakData"  "${ESPEAK_DIR}/share/espeak-ng-data"
+                "-VoicesDir"   "${VOCALIZER_VOICES_DIR}"
+            COMMENT "Self-containing ${fmt} (Windows)")
+    endif()
 endfunction()
 
 vocalizer_self_contain(Vocalizer_VST3 "VST3")
