@@ -1,0 +1,26 @@
+Vocalizer — bundled voice models
+================================
+
+Every voice bundled with Vocalizer is a Piper TTS model
+(https://huggingface.co/rhasspy/piper-voices) trained only on recordings in
+the PUBLIC DOMAIN, so the models can be redistributed. Licences were checked
+against each voice's upstream MODEL_CARD on 2026-10-07. All five were trained
+by Bryce Beattie (https://brycebeattie.com/files/tts/).
+
+Voice (preset)         Model file                  Dataset                                              Dataset licence
+---------------------  --------------------------  ---------------------------------------------------  ---------------
+CORI (UK), CORI ROBOT  en_GB-cori-medium.onnx      LibriVox (https://librivox.org)                      Public domain
+LJ (US)                en_US-ljspeech-medium.onnx  LJ Speech (https://keithito.com/LJ-Speech-Dataset/)  Public domain
+KRISTIN (US)           en_US-kristin-medium.onnx   LibriVox (https://librivox.org)                      Public domain
+NORMAN (US)            en_US-norman-medium.onnx    LibriVox (https://librivox.org)                      Public domain
+JOHN (US)              en_US-john-medium.onnx      LibriVox (https://librivox.org)                      Public domain
+
+Each model's .onnx.json config sits next to it in this folder.
+
+Voices removed for licensing (no longer shipped; sessions that used them load
+with CORI (UK)): lessac (Blizzard 2013 research-only licence), ryan and
+hfc_female (CC BY-NC-SA 4.0), alan and amy (Mycroft mimic3, all rights
+reserved).
+
+Your own Piper voices can go in ~/Documents/Vocalizer/Voices/ — check each
+model's licence yourself before sharing anything made with it.

@@ -33,16 +33,17 @@ juce::Array<VoicePreset> VoicePresets::discover()
         float rate; bool atOn; int mode; float retune; float strength; float formant;
     };
 
+    // Only voices whose training data is public domain ship (licences checked
+    // against the upstream Piper MODEL_CARDs; credits in Resources/voices/
+    // VOICES.txt). CORI is first, so it is the default (param default = 0).
     const Curated curated[] =
     {
-        { "LESSAC",       "en_US-lessac-medium.onnx.json",     1.0f, true, 0,  20.0f, 1.0f, 1.0f },
-        { "LESSAC ROBOT", "en_US-lessac-medium.onnx.json",     1.0f, true, 0,   0.0f, 1.0f, 1.0f },
-        { "AMY",          "en_US-amy-medium.onnx.json",        1.0f, true, 0,  20.0f, 1.0f, 1.0f },
-        { "RYAN",         "en_US-ryan-medium.onnx.json",       1.0f, true, 0,  20.0f, 1.0f, 1.0f },
-        { "HFC FEMALE",   "en_US-hfc_female-medium.onnx.json", 1.0f, true, 0,  20.0f, 1.0f, 1.0f },
-        { "ALAN (UK)",    "en_GB-alan-medium.onnx.json",       1.0f, true, 0,  20.0f, 1.0f, 1.0f },
         { "CORI (UK)",    "en_GB-cori-medium.onnx.json",       1.0f, true, 0,  20.0f, 1.0f, 1.0f },
-        { "RYAN ROBOT",   "en_US-ryan-medium.onnx.json",       1.0f, true, 0,   0.0f, 1.0f, 1.0f },
+        { "CORI ROBOT",   "en_GB-cori-medium.onnx.json",       1.0f, true, 0,   0.0f, 1.0f, 1.0f },
+        { "LJ (US)",      "en_US-ljspeech-medium.onnx.json",   1.0f, true, 0,  20.0f, 1.0f, 1.0f },
+        { "KRISTIN (US)", "en_US-kristin-medium.onnx.json",    1.0f, true, 0,  20.0f, 1.0f, 1.0f },
+        { "NORMAN (US)",  "en_US-norman-medium.onnx.json",     1.0f, true, 0,  20.0f, 1.0f, 1.0f },
+        { "JOHN (US)",    "en_US-john-medium.onnx.json",       1.0f, true, 0,  20.0f, 1.0f, 1.0f },
     };
 
     for (const auto& c : curated)
@@ -84,4 +85,25 @@ juce::StringArray VoicePresets::names()
     if (n.isEmpty())
         n.add ("(no voices)");
     return n;
+}
+
+int VoicePresets::indexForSavedName (const juce::Array<VoicePreset>& presets,
+                                     const juce::String& savedName)
+{
+    for (int i = 0; i < presets.size(); ++i)
+        if (presets[i].name == savedName)
+            return i;
+
+    // Removed voices (and unknown/user voices no longer present) fall back to
+    // Cori; "ROBOT" variants keep their hard-snap character.
+    const bool robot = savedName.containsIgnoreCase ("ROBOT");
+    for (int i = 0; i < presets.size(); ++i)
+        if (presets[i].name == (robot ? "CORI ROBOT" : defaultVoiceName))
+            return i;
+
+    for (int i = 0; i < presets.size(); ++i)
+        if (presets[i].name == defaultVoiceName)
+            return i;
+
+    return 0;
 }

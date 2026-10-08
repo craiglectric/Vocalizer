@@ -25,18 +25,29 @@ if ! otool -l "$macos/libespeak-ng.dylib" | grep -q "@loader_path"; then
 fi
 
 # 3) Leave only @loader_path on the plugin binary (drop dev rpaths CMake adds).
-for rp in $(otool -l "$binary" | awk '/LC_RPATH/{f=1} f&&/path/{print $2; f=0}'); do
-    [ "$rp" != "@loader_path" ] && install_name_tool -delete_rpath "$rp" "$binary" || true
-done
+# Read whole lines: the dev rpaths contain spaces ("Ableton Plug Ins"), which a
+# word-split `for` loop + awk $2 truncated, leaving absolute dev rpaths behind.
+otool -l "$binary" \
+  | awk '/LC_RPATH/{f=1} f&&/ path /{sub(/^ *path /,""); sub(/ \(offset [0-9]+\)$/,""); print; f=0}' \
+  | while IFS= read -r rp; do
+        [ "$rp" != "@loader_path" ] && install_name_tool -delete_rpath "$rp" "$binary" || true
+    done
 
-# 4) Resources: espeak-ng-data + voices.
+# 4) Resources: espeak-ng-data + voices. Start the voices folder clean so a
+# voice removed from Resources/voices (e.g. for licensing) can't linger in a
+# rebuilt bundle; VOICES.txt is the per-voice dataset/licence credit.
+rm -rf "$res/voices"
 mkdir -p "$res/voices"
 rm -rf "$res/espeak-ng-data"
 cp -R "$espeakData" "$res/espeak-ng-data"
 cp -f "$voices"/*.onnx "$voices"/*.onnx.json "$res/voices/" 2>/dev/null || true
+cp -f "$voices"/VOICES.txt "$res/voices/" 2>/dev/null || true
 
 # 5) Strip detritus, then ad-hoc sign the dylibs and the whole bundle.
 find "$bundle" -name '._*' -delete
+# Finder-style "name 2" duplicates (seen on this Desktop) break codesign.
+find "$bundle" -name '* [0-9]' -delete
+find "$bundle" -name '* [0-9].*' -delete
 xattr -cr "$bundle"
 codesign --force --sign - "$macos/libonnxruntime.1.14.1.dylib" \
                           "$macos/libespeak-ng.dylib" \

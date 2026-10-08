@@ -97,6 +97,82 @@ int main()
         check (melodyOk, msg);
     }
 
+    // ---- Voice compatibility (removed voices -> CORI) ----------------------------
+    {
+        auto make = []
+        {
+            std::unique_ptr<juce::AudioProcessor> b (createPluginFilter());
+            return b;
+        };
+        auto voiceName = [] (VocalizerAudioProcessor* p)
+        {
+            const int i = (int) std::lround (p->apvts.getRawParameterValue (ParamID::voicePreset)->load());
+            const auto& ps = p->getVoicePresets();
+            return (i >= 0 && i < ps.size()) ? ps[i].name : juce::String ("<out of range>");
+        };
+        // Build a session blob: the current APVTS state with voicePreset forced to
+        // `index` and an optional saved voiceName (empty = a v0.1.0 session).
+        auto blob = [] (VocalizerAudioProcessor* p, int index, const juce::String& name)
+        {
+            auto state = p->apvts.copyState();
+            state.getChildWithProperty ("id", ParamID::voicePreset).setProperty ("value", index, nullptr);
+            if (name.isNotEmpty()) state.setProperty ("voiceName", name, nullptr);
+            juce::MemoryBlock mb;
+            juce::AudioProcessor::copyXmlToBinary (*state.createXml(), mb);
+            return mb;
+        };
+
+        auto base = make();
+        auto* p = dynamic_cast<VocalizerAudioProcessor*> (base.get());
+        check (voiceName (p) == "CORI (UK)", "default voice is CORI (UK)");
+
+        // v0.1.0 sessions stored only an index into the old LESSAC/AMY/RYAN/...
+        // table (7 = RYAN ROBOT, 0 = LESSAC) — all load as CORI (UK).
+        for (int legacy : { 0, 3, 7 })
+        {
+            auto other = make();
+            auto* q = dynamic_cast<VocalizerAudioProcessor*> (other.get());
+            auto mb = blob (p, legacy, {});
+            if (auto* vp = q->apvts.getParameter (ParamID::voicePreset)) vp->setValueNotifyingHost (vp->convertTo0to1 (2.0f));
+            q->setStateInformation (mb.getData(), (int) mb.getSize());
+            char msg[120];
+            std::snprintf (msg, sizeof msg, "legacy index %d loads as CORI (UK) (got %s)", legacy, voiceName (q).toRawUTF8());
+            check (voiceName (q) == "CORI (UK)", msg);
+        }
+
+        // Named sessions: removed voices map to Cori (ROBOT keeps ROBOT); a stale
+        // index is overridden by the name.
+        const std::pair<const char*, const char*> named[] =
+        {
+            { "LESSAC",       "CORI (UK)" },  { "RYAN ROBOT", "CORI ROBOT" },
+            { "ALAN (UK)",    "CORI (UK)" },  { "KRISTIN (US)", "KRISTIN (US)" },
+            { "JOHN (US)",    "JOHN (US)" },
+        };
+        for (const auto& [savedName, want] : named)
+        {
+            auto other = make();
+            auto* q = dynamic_cast<VocalizerAudioProcessor*> (other.get());
+            auto mb = blob (p, 1, savedName);
+            q->setStateInformation (mb.getData(), (int) mb.getSize());
+            char msg[160];
+            std::snprintf (msg, sizeof msg, "saved voice '%s' loads as %s (got %s)", savedName, want, voiceName (q).toRawUTF8());
+            check (voiceName (q) == want, msg);
+        }
+
+        // Round trip through get/setState keeps a non-default voice by name.
+        {
+            const auto& ps = p->getVoicePresets();
+            int norman = -1;
+            for (int i = 0; i < ps.size(); ++i) if (ps[i].name == "NORMAN (US)") norman = i;
+            if (auto* vp = p->apvts.getParameter (ParamID::voicePreset)) vp->setValueNotifyingHost (vp->convertTo0to1 ((float) norman));
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            auto other = make();
+            auto* q = dynamic_cast<VocalizerAudioProcessor*> (other.get());
+            q->setStateInformation (mb.getData(), (int) mb.getSize());
+            check (norman >= 0 && voiceName (q) == "NORMAN (US)", "NORMAN (US) round-trips by name");
+        }
+    }
+
     // ---- Voice switching -------------------------------------------------------
     {
         std::unique_ptr<juce::AudioProcessor> base (createPluginFilter());

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Vocalizer VERSION 0.1.0)
+project(Vocalizer VERSION 0.2.0)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,6 +10,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # of the same libs.
 if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
+endif()
+
+# RealtimeSanitizer (house pattern): processBlock is [[clang::nonblocking]] in this build only.
+# Needs Homebrew LLVM, a macOS 13 target and the shared ../JUCE; build only the rtsan_check
+# harness in that tree (JUCE's VST3 wrapper does not compile under LLVM 23):
+#   cmake -B build-rtsan -DVOCALIZER_RTSAN=ON -DVOCALIZER_BUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+#     -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DFETCHCONTENT_SOURCE_DIR_JUCE="$PWD/../JUCE" \
+#     -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++
+#   cmake --build build-rtsan --target rtsan_check -j 4
+#   RTSAN_OPTIONS="suppressions='$PWD/Tests/rtsan-suppressions.txt'" build-rtsan/rtsan_check
+option(VOCALIZER_RTSAN "Build with Clang RealtimeSanitizer (needs an LLVM clang, not Apple clang)" OFF)
+if(VOCALIZER_RTSAN)
+    add_compile_options(-fsanitize=realtime)
+    add_link_options(-fsanitize=realtime)
+    add_compile_definitions(VOCALIZER_RTSAN=1)
 endif()
 
 include(FetchContent)
@@ -83,7 +98,7 @@ set(PIPER_PHONEMIZE_INCLUDES
 set(VOCALIZER_ESPEAK_DATA_DIR  ${ESPEAK_DIR}/share)
 set(VOCALIZER_VOICES_DIR       ${CMAKE_CURRENT_SOURCE_DIR}/Resources/voices)
 set(VOCALIZER_DEFAULT_VOICE_JSON
-    ${CMAKE_CURRENT_SOURCE_DIR}/Resources/voices/en_US-lessac-medium.onnx.json)
+    ${CMAKE_CURRENT_SOURCE_DIR}/Resources/voices/en_GB-cori-medium.onnx.json)
 
 #==============================================================================
 # Vocalizer — instrument that reads MIDI (pitch target only) and generates
@@ -290,6 +305,28 @@ if(VOCALIZER_BUILD_TOOLS)
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0)
 
+    # rtsan_check — real-time safety harness: an audio thread drives the real
+    # processBlock (MIDI incl. SysEx, melody capture, audition) while the main
+    # thread runs two real Generates + transport/state actions. Meaningful in the
+    # VOCALIZER_RTSAN tree (recipe at the top of this file).
+    add_executable(rtsan_check Tests/rtsan_check.cpp)
+    target_include_directories(rtsan_check PRIVATE Source)
+    target_link_libraries(rtsan_check PRIVATE
+        Vocalizer
+        onnxruntime
+        espeak-ng
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_gui_extra
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+    target_compile_definitions(rtsan_check PRIVATE
+        JUCE_USE_CURL=0
+        JUCE_WEB_BROWSER=0
+        JUCE_MODAL_LOOPS_PERMITTED=1)
+    set_target_properties(rtsan_check PROPERTIES
+        BUILD_RPATH "${ORT_DIR}/lib;${ESPEAK_DIR}/lib")
+
     # state_smoke — Phase 5: state round-trip + voice switching.
     add_executable(state_smoke Tests/state_smoke.cpp)
     target_include_directories(state_smoke PRIVATE Source)
@@ -307,5 +344,32 @@ if(VOCALIZER_BUILD_TOOLS)
         JUCE_WEB_BROWSER=0
         JUCE_MODAL_LOOPS_PERMITTED=1)
     set_target_properties(state_smoke PROPERTIES
+        BUILD_RPATH "${ORT_DIR}/lib;${ESPEAK_DIR}/lib")
+endif()
+
+#==============================================================================
+# How-to video renderer (opt-in): real editor + real audio, offline
+# (../shared/howto/HowToHost.h). Links the shared code like render_gui; a
+# console app, so nothing is installed.
+#   cmake -B build-howto -DVOCALIZER_BUILD_HOWTO=ON -DCMAKE_BUILD_TYPE=Release
+#   cmake --build build-howto --target VocalizerHowTo
+#==============================================================================
+option(VOCALIZER_BUILD_HOWTO "Build the how-to video renderer" OFF)
+if(VOCALIZER_BUILD_HOWTO)
+    add_executable(VocalizerHowTo tools/howto/HowTo.cpp)
+    target_include_directories(VocalizerHowTo PRIVATE Source)
+    target_link_libraries(VocalizerHowTo PRIVATE
+        Vocalizer
+        onnxruntime
+        espeak-ng
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_gui_extra
+        juce::juce_recommended_config_flags)
+    target_compile_definitions(VocalizerHowTo PRIVATE
+        JUCE_USE_CURL=0
+        JUCE_WEB_BROWSER=0
+        JUCE_MODAL_LOOPS_PERMITTED=1)
+    set_target_properties(VocalizerHowTo PROPERTIES
         BUILD_RPATH "${ORT_DIR}/lib;${ESPEAK_DIR}/lib")
 endif()

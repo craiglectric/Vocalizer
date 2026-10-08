@@ -1,5 +1,8 @@
 # Build output
 build/
+build-rtsan/
+build-validate/
+build-howto/
 cmake-build-*/
 
 # IDE / editor

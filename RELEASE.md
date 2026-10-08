@@ -65,9 +65,12 @@ bash scripts/build_installer.sh 0.1.0           # optional .pkg
    audition, and **drag the clip onto a track** (the external drag gesture can't
    be tested headless); confirm it sounds right by ear on both OSes.
 
-5. **More voices (optional).** The spec suggests ~6 curated voices; 2 models /
-   3 presets ship now. Drop more `*.onnx`+`*.onnx.json` into `Resources/voices/`
-   and add rows to the curated table in `Source/params/VoicePresets.cpp` (or use
+5. **More voices (optional).** Five public-domain voices / six presets ship
+   now (credits + licences in `Resources/voices/VOICES.txt`). Before adding a
+   voice, read its upstream MODEL_CARD: only redistribute models whose training
+   dataset allows it (public domain / permissive). Then drop the
+   `*.onnx`+`*.onnx.json` into `Resources/voices/`, add a row to the curated
+   table in `Source/params/VoicePresets.cpp` **and** to `VOICES.txt` (or use
    the `~/Documents/Vocalizer/Voices/` user folder — no rebuild needed).
 
 ## GPL note

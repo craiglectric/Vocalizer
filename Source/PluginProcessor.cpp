@@ -70,7 +70,7 @@ bool VocalizerAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 }
 
 void VocalizerAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
-                                            juce::MidiBuffer& midiMessages)
+                                            juce::MidiBuffer& midiMessages) VOCALIZER_NONBLOCKING
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -252,6 +252,14 @@ void VocalizerAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     // Stash the typed text + the captured MIDI melody alongside the params.
     state.setProperty ("text", text, nullptr);
 
+    // Save the voice by NAME too: the voicePreset index depends on which models
+    // are installed (bundled + user folder), so the name is what we restore by.
+    {
+        const int idx = (int) std::lround (apvts.getRawParameterValue (ParamID::voicePreset)->load());
+        if (idx >= 0 && idx < presets.size())
+            state.setProperty ("voiceName", presets[idx].name, nullptr);
+    }
+
     const Melody m = melody.snapshot();
     juce::ValueTree melodyTree ("MELODY");
     melodyTree.setProperty ("durationSec", m.durationSec, nullptr);
@@ -292,6 +300,26 @@ void VocalizerAudioProcessor::setStateInformation (const void* data, int sizeInB
                                          (int)    note.getProperty ("n", -1) });
                 }
                 melody.setMelody (m);
+            }
+
+            // Resolve the voice. New sessions carry "voiceName"; v0.1.0 sessions
+            // only stored an index into the old table (LESSAC, AMY, RYAN, ...),
+            // whose voices were removed for licensing — those load as CORI (UK).
+            // The autotune params (incl. a ROBOT preset's hard snap) are saved
+            // separately, so the character carries over.
+            {
+                const auto savedName = tree.getProperty ("voiceName").toString();
+                const int idx = VoicePresets::indexForSavedName (presets, savedName);
+
+                auto param = tree.getChildWithProperty ("id", ParamID::voicePreset);
+                if (! param.isValid())
+                {
+                    param = juce::ValueTree ("PARAM");
+                    param.setProperty ("id", ParamID::voicePreset, nullptr);
+                    tree.appendChild (param, nullptr);
+                }
+                param.setProperty ("value", idx, nullptr);
+                tree.removeProperty ("voiceName", nullptr);
             }
 
             apvts.replaceState (tree);

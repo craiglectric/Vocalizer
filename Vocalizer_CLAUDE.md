@@ -39,6 +39,8 @@ This is the load-bearing decision. **Resolve it before writing engine code**, be
 | **Phonemizer / G2P** | text → phonemes | **espeak-ng = GPLv3** | ❌ **Viral for closed-source.** This is the trap. |
 | Voice models (.onnx) | The actual voices | **Per-model — varies** | ⚠️ Some trained on restricted datasets. Check each before bundling. |
 
+> **VOICES (2026-10-07): only public-domain-trained voices ship.** Bundled: CORI (UK, default) + CORI ROBOT, LJ (US), KRISTIN (US), NORMAN (US), JOHN (US) — all by Bryce Beattie on LibriVox / LJ Speech, dataset licence "public domain" per the upstream MODEL_CARDs; credits in `Resources/voices/VOICES.txt` (copied into the bundle by `bundle_fixup.sh`, which now wipes the bundle's voices folder first so removed voices can't linger). **Removed:** lessac (Blizzard 2013, research-only), ryan + hfc_female (CC BY-NC-SA 4.0), alan + amy (Mycroft mimic3, all rights reserved) — and anything fine-tuned from lessac. State saves the voice by name (`voiceName`); unknown/removed names and v0.1.0 index-only sessions load as CORI (UK) (a "… ROBOT" name → CORI ROBOT), via `VoicePresets::indexForSavedName`; covered by `state_smoke`.
+
 **The espeak-ng problem:** Piper's C++ path phonemizes text via `piper-phonemize`, which wraps **espeak-ng (GPLv3)**. Linking GPLv3 into a closed-source plugin means you'd have to open-source the plugin. Options, decide explicitly:
 - **(a) Accept GPL / open-source the plugin** — simplest technically.
 - **(b) Run espeak-ng as a separate process** and treat it as aggregation — legally grey, get advice, and subprocess-spawning fights AU hardened-runtime / notarization on Mac.
@@ -148,6 +150,7 @@ Piper inference pipeline: text → **phonemes** (Phonemizer) → **phoneme IDs**
 Because correction is offline, use a quality formant-preserving algorithm (PSOLA for voice, or phase-vocoder with formant correction) with look-ahead — no real-time constraints.
 - **PitchTracker:** YIN/pYIN per frame to get the speech's source pitch.
 - **PitchCorrector:** shift each frame so source → target pitch, formant-preserved (no chipmunk). `strength` blends corrected vs original pitch; `retuneSpeed`/glide sets snap hardness.
+- **Formant (`formantPreserve`, 0–1, default 1):** 1 = grains copied unresampled, formants preserved. Lower values resample each PSOLA grain by `(targetF0/sourceF0)^(1 - formantPreserve)`, so the spectral envelope moves with the pitch (0 = fully, like a plain resampler: chipmunk when shifted up, giant when shifted down). Applies only where the pitch is actually moved (voiced frames with autotune on and strength > 0); unvoiced consonants are untouched. Read at Generate time like the other autotune params. Covered by `dsp_smoke` test 2b. (Until 2026-10-07 this param was "reserved" and the knob did nothing.)
 
 ### 4.5 Audition playback (AuditionPlayer)
 A simple sample-playback voice that reads the rendered buffer and mixes to output in `processBlock`. Atomic play position; Play/Stop (and optional loop + transport-follow) from the UI. Fully real-time safe (buffer read only).
@@ -170,7 +173,7 @@ Persist: text, selected voice preset, all autotune params, and the captured MIDI
 ## 5. Voice / style presets
 A preset = **a bundled Piper voice model + speaking params + optional autotune defaults**. "Style" here is voice-model + rate/pitch + downstream autotune character (Piper itself isn't very expressive). Be honest about that in copy.
 
-Curate ~6 distinct voices (e.g. male / female / neutral / a deliberately lo-fi "robotic" one / an accent or two), each with default `speakingRate`, pitch baseline, and a sensible autotune default (e.g. the "robot" voice ships with hard-snap on). Plus a **user models folder** (`~/Documents/Vocalizer/Voices/`) scanned at startup so users can add their own Piper models without a plugin update. Verify each bundled model's license (§2).
+**Shipped set (2026-10-07):** CORI (UK) (default), CORI ROBOT (Cori with hard snap, retune 0 ms), LJ (US), KRISTIN (US), NORMAN (US), JOHN (US) — public-domain datasets only, see §2. Originally planned: curate ~6 distinct voices (e.g. male / female / neutral / a deliberately lo-fi "robotic" one / an accent or two), each with default `speakingRate`, pitch baseline, and a sensible autotune default (e.g. the "robot" voice ships with hard-snap on). Plus a **user models folder** (`~/Documents/Vocalizer/Voices/`) scanned at startup so users can add their own Piper models without a plugin update. Verify each bundled model's license (§2).
 
 ---
 
@@ -200,7 +203,7 @@ Automatable params (text + captured melody are state, not params):
 - `scale` — Choice {Chromatic, Major, Minor, …}
 - `retuneSpeed` — Float (0–500 ms; 0 = hard snap)
 - `strength` — Float (0–1)
-- `formantPreserve` — Float (0–1) or Bool
+- `formantPreserve` — Float (0–1); 1 = formants preserved, 0 = formants follow the pitch shift (§4.4)
 - `outputGain` — Float (dB)
 
 ---
@@ -253,3 +256,12 @@ auval -v aumu Vclz Cowd     # macOS instrument
 - How many voices to bundle vs leave to the user folder (size budget).
 - Syllable-to-note time-locking = future phase, not v1.
 - AUv3 / Standalone targets deferred unless needed.
+
+---
+
+## 11. Status: RTSan check (2026-09-28) — needs a re-release
+- `processBlock` is `[[clang::nonblocking]]` in RTSan builds (`VOCALIZER_NONBLOCKING`, option `VOCALIZER_RTSAN`; recipe at the top of `CMakeLists.txt`). No-op in shipping builds.
+- Harness `Tests/rtsan_check.cpp` (tools target `rtsan_check`): an audio thread runs the real processBlock (random block sizes, gain drags, dense MIDI incl. SysEx + velocity-0 note-offs, melody armed) while the main thread arms/clears the melody, runs two real Generates (lock-free handoff + retire queue), toggles play/stop/loop, pumps `serviceMessageThread()` and saves/restores state.
+- **Found + fixed:** `MelodyRecorder::processBlock` called `meta.getMessage()`, which builds a `juce::MidiMessage` and mallocs/frees for any event over 8 bytes (SysEx) while the melody is armed. It now reads the raw MIDI bytes (same note-on/off rules). After: **0 violations** in halting mode; only suppression is Accelerate's one-time `BLASStateRetain` (`Tests/rtsan-suppressions.txt`).
+- **Also fixed:** `scripts/bundle_fixup.sh` word-split the binary's rpaths, so with the repo under "Ableton Plug Ins" the absolute dev rpath was never removed from shipped binaries. It now reads whole lines, and deletes Finder "name 2" duplicates before codesigning.
+- Gotcha: `build/` was configured from the old `~/Desktop/Vocalizer` path and no longer configures; the 2026-09-28 check used a fresh `build-validate/` (Release, tools ON). dsp/state/render smokes pass, auval + pluginval (strictness 10) pass.

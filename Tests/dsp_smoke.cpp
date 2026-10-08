@@ -2,6 +2,7 @@
 //   1) PitchCorrector forces the output f0 onto the target MIDI note.
 //   2) Formants are preserved — the spectral-envelope peak stays put when the
 //      pitch is shifted (a naive resample would move it).
+//   2b) FORMANT (formantPreserve) < 1 makes the formants follow the pitch.
 //
 //   cmake -B build -DVOCALIZER_BUILD_TOOLS=ON
 //   cmake --build build --target dsp_smoke && ./build/dsp_smoke
@@ -157,6 +158,41 @@ int main()
                "pitch shifted to ~100 Hz");
         check (std::abs (outForm - srcForm) < 130.0f,
                "formant peak preserved (within 130 Hz)");
+    }
+
+    // --- Test 2b: FORMANT knob at 0 — formants follow the pitch ------------------
+    std::printf ("== formant preserve 0 (formant SHOULD move with pitch) ==\n");
+    {
+        auto src = makeVowel (150.0f, 1.5, 650.0f, 1080.0f);
+        const float srcForm = spectralPeak (src, 300.0f, 900.0f);
+
+        Melody m; m.durationSec = 1.5;
+        const int note = (int) std::lround (PitchCorrector::hzToMidi (100.0f));
+        m.notes.push_back ({ 0.0, 1.5, note });
+        const float wantF0 = PitchCorrector::midiToHz ((float) note);
+
+        PitchCorrector::Params p; p.mode = 0; p.strength = 1.0f; p.retuneSpeedMs = 0.0f;
+        p.formantPreserve = 0.0f;
+        auto out = PitchCorrector::process (src, SR, m, p);
+
+        const float outF0   = medianF0 (out);
+        const float outForm = spectralPeak (out, 300.0f, 900.0f);
+        const float wantForm = srcForm * wantF0 / 150.0f;     // envelope scaled by pitch ratio
+
+        std::printf ("   output: f0 %.1f Hz, formant %.0f Hz (expected ~%.0f)\n",
+                     outF0, outForm, wantForm);
+
+        check (std::abs (outF0 - wantF0) / outF0 < 0.06f, "pitch still shifted to ~100 Hz");
+        check (std::abs (outForm - wantForm) < 100.0f && outForm < srcForm - 100.0f,
+               "formant peak moved down with the pitch");
+
+        // Half-way: the formant lands between preserved and fully moved.
+        p.formantPreserve = 0.5f;
+        auto half = PitchCorrector::process (src, SR, m, p);
+        const float halfForm = spectralPeak (half, 300.0f, 900.0f);
+        std::printf ("   preserve 0.5: formant %.0f Hz\n", halfForm);
+        check (halfForm <= srcForm && halfForm > outForm + 1.0f,
+               "formant preserve 0.5 sits between 0 and 1");
     }
 
     // --- Test 3: scale-snap -----------------------------------------------------

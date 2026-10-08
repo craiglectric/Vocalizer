@@ -11,7 +11,8 @@
 // resynthesizes via synthesis-pitch-synchronous OLA (TD-PSOLA style): grain
 // content comes from the source at its own period, so the spectral envelope —
 // the formants — is preserved while the pitch is forced onto the target. No
-// resampling of grains, so no chipmunk effect.
+// resampling of grains, so no chipmunk effect. `formantPreserve` < 1 resamples
+// the grains partway so the formants follow the pitch shift (§4.4).
 //
 // `strength` blends corrected vs original pitch (in the log/MIDI domain);
 // `retuneSpeedMs` glides the target (0 = hard snap → robotic).
@@ -26,7 +27,10 @@ public:
         int   scale          = 1;     // index into the scale table
         float retuneSpeedMs  = 20.0f;
         float strength       = 1.0f;  // 0..1
-        float formantPreserve = 1.0f; // reserved; PSOLA preserves formants already
+        // 1 = formants preserved (no chipmunk). Lower values resample each PSOLA
+        // grain by (pitch ratio)^(1 - formantPreserve), so at 0 the formants
+        // move with the pitch like a plain resampler (chipmunk up / giant down).
+        float formantPreserve = 1.0f;
 
         // Clip-sync (CLAUDE.md §4.3 absolute-time mode): time-stretch the speech
         // so the output length == the captured melody length, and follow the

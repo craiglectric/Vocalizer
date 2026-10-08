@@ -5,7 +5,7 @@
 //==============================================================================
 // VoicePresets — the curated voice table (CLAUDE.md §5). A preset = a bundled
 // Piper model + speaking params + autotune defaults. Several presets may share a
-// model (e.g. a soft "LESSAC" and a hard-snap "LESSAC ROBOT"). User-supplied
+// model (e.g. a soft "CORI (UK)" and a hard-snap "CORI ROBOT"). User-supplied
 // models dropped into ~/Documents/Vocalizer/Voices/ are discovered at startup
 // and appended, so users can add voices without a plugin update.
 //==============================================================================
@@ -35,4 +35,13 @@ public:
 
     // Display names for the voicePreset Choice parameter.
     static juce::StringArray names();
+
+    // The default voice (first curated row).
+    static constexpr const char* defaultVoiceName = "CORI (UK)";
+
+    // Index of the preset a saved session named. Unknown names (voices removed
+    // for licensing, e.g. "LESSAC"/"RYAN ROBOT", or a user voice that is gone)
+    // map to CORI (UK) — or CORI ROBOT for a "... ROBOT" name.
+    static int indexForSavedName (const juce::Array<VoicePreset>& presets,
+                                  const juce::String& savedName);
 };

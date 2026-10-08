@@ -149,12 +149,15 @@ juce::AudioBuffer<float> PitchCorrector::process (const juce::AudioBuffer<float>
     //    INPUT at source-period spacing; each output grain draws content from the
     //    mark nearest the time-mapped input position and is laid down at the
     //    output position spaced by the target period. Output spacing sets the
-    //    pitch (target); the input/output time map sets the duration (clip). Grains
-    //    are unresampled, so formants are preserved.
+    //    pitch (target); the input/output time map sets the duration (clip). At
+    //    formantPreserve = 1 grains are unresampled, so formants are preserved;
+    //    lower values resample each grain so the formants follow the pitch.
     std::vector<float> acc  ((size_t) outN, 0.0f);
     std::vector<float> norm ((size_t) outN, 0.0f);
 
     const float strength = std::clamp (params.strength, 0.0f, 1.0f);
+    // How far formants follow the pitch shift: 0 = preserved, 1 = fully moved.
+    const float formantMove = 1.0f - std::clamp (params.formantPreserve, 0.0f, 1.0f);
     const int   minP = std::max (2, (int) (sr / 1000.0));  // 1000 Hz ceiling
     const int   maxP = (int) (sr / 60.0);                  // 60 Hz floor
     const int   defaultP = (int) (sr / 120.0);             // unvoiced grain spacing
@@ -212,14 +215,41 @@ juce::AudioBuffer<float> PitchCorrector::process (const juce::AudioBuffer<float>
         const int half = std::clamp ((int) std::ceil (std::max ((double) Pa, Ps)),
                                      minP, 3 * maxP);
 
+        // Formant factor: 1 = grain copied as-is (formants preserved); otherwise
+        // the grain is read at rate rf, which scales its spectral envelope by rf.
+        // rf = (pitch ratio)^(1 - formantPreserve): at 0 the formants move fully
+        // with the pitch (classic resampled "chipmunk"/"giant" timbre).
+        const bool   moveFormants = formantMove > 1.0e-4f && std::abs ((double) Pa - Ps) > 1.0e-6;
+        const double rf = moveFormants
+                        ? std::clamp (std::pow ((double) Pa / Ps, (double) formantMove), 0.25, 4.0)
+                        : 1.0;
+
         for (int j = -half; j <= half; ++j)
         {
-            const int in  = a + j;
             const int out = outCentre + j;
-            if (in < 0 || in >= N || out < 0 || out >= outN)
+            if (out < 0 || out >= outN)
                 continue;
+
+            float s;
+            if (! moveFormants)
+            {
+                const int in = a + j;
+                if (in < 0 || in >= N)
+                    continue;
+                s = x[in];
+            }
+            else
+            {
+                const double inPos = (double) a + (double) j * rf;
+                const int    i0 = (int) std::floor (inPos);
+                if (i0 < 0 || i0 + 1 >= N)
+                    continue;
+                const float frac = (float) (inPos - (double) i0);
+                s = x[i0] + frac * (x[i0 + 1] - x[i0]);
+            }
+
             const float w = 0.5f * (1.0f + std::cos (juce::MathConstants<float>::pi * (float) j / (float) half));
-            acc[(size_t) out]  += x[in] * w;
+            acc[(size_t) out]  += s * w;
             norm[(size_t) out] += w;
         }
 

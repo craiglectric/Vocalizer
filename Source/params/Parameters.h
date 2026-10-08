@@ -27,8 +27,8 @@ namespace ParamID
 
 namespace Params
 {
-    // Curated voice slots. Phase 0 ships placeholder names; the real bundled
-    // Piper models + per-voice defaults arrive with VoicePresets in phase 5.
+    // Voice preset names (VoicePresets::names(): curated bundled voices, CORI
+    // first, then any user-folder models).
     const juce::StringArray& voiceNames();
 
     // Autotune retune-target mode (CLAUDE.md §4.3 / §7).

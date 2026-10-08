@@ -1,0 +1,5 @@
+# RealtimeSanitizer suppressions for Tests/rtsan_check built with -DVOCALIZER_RTSAN=ON.
+# Apple's Accelerate/vDSP callocs a BLAS thread-local state block on a thread's first call
+# (JUCE routes FloatVectorOperations through vDSP on macOS). Once per thread, unavoidable.
+# Everything else RTSan reports is ours and fails the run.
+call-stack-contains:BLASStateRetain

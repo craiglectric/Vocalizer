@@ -25,8 +25,17 @@ void MelodyRecorder::processBlock (const juce::MidiBuffer& midi, int numSamples)
 
     for (const auto meta : midi)
     {
-        const auto m = meta.getMessage();
-        if (! (m.isNoteOn() || m.isNoteOff()))
+        // Read the raw bytes: meta.getMessage() builds a juce::MidiMessage, which
+        // heap-allocates for anything over 8 bytes (SysEx) — found by RTSan.
+        // Same rules as MidiMessage::isNoteOn()/isNoteOff(): 0x90 with velocity 0
+        // counts as a note-off.
+        if (meta.numBytes < 3)
+            continue;
+
+        const auto status = meta.data[0] & 0xf0;
+        const bool noteOn  = status == 0x90 && meta.data[2] != 0;
+        const bool noteOff = status == 0x80 || (status == 0x90 && meta.data[2] == 0);
+        if (! (noteOn || noteOff))
             continue;
 
         int idx = writeIndex.load (std::memory_order_relaxed);
@@ -35,8 +44,8 @@ void MelodyRecorder::processBlock (const juce::MidiBuffer& midi, int numSamples)
 
         RawEvent e;
         e.timeSamples = base + meta.samplePosition;
-        e.note = m.getNoteNumber();
-        e.isOn = m.isNoteOn() && m.getVelocity() > 0;
+        e.note = meta.data[1] & 0x7f;
+        e.isOn = noteOn;
 
         events[(size_t) idx] = e;
         writeIndex.store (idx + 1, std::memory_order_release);

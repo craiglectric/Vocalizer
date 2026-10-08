@@ -9,6 +9,17 @@
 #include <atomic>
 #include <vector>
 
+// [[clang::nonblocking]] lets RealtimeSanitizer check the audio path. Only enabled in RTSan
+// builds (-DVOCALIZER_RTSAN=ON, recipe in CMakeLists.txt; house pattern from RatXciter).
+#if defined(VOCALIZER_RTSAN) && defined(__clang__) && defined(__has_cpp_attribute)
+    #if __has_cpp_attribute(clang::nonblocking)
+        #define VOCALIZER_NONBLOCKING [[clang::nonblocking]]
+    #endif
+#endif
+#ifndef VOCALIZER_NONBLOCKING
+    #define VOCALIZER_NONBLOCKING
+#endif
+
 //==============================================================================
 // Vocalizer — Phase 2 (CLAUDE.md §8): Generate + audition.
 //
@@ -28,7 +39,7 @@ public:
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
-    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) VOCALIZER_NONBLOCKING override;
 
     //==============================================================================
     juce::AudioProcessorEditor* createEditor() override;

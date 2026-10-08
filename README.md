@@ -12,7 +12,9 @@ can force the whole plugin's license.
 
 **Feature-complete (v1), Phases 0–6.** Type text → optionally capture a MIDI
 melody → pick a voice → **Generate** → the words are sung onto your melody
-(TD-PSOLA, formant-preserving) → audition through the track → **drag the WAV**
+(TD-PSOLA; the **FORMANT** knob sets how far the formants follow the pitch —
+1 = preserved/natural, 0 = moved fully with the pitch, chipmunk up / giant down)
+→ audition through the track → **drag the WAV**
 onto an audio track. VST3 + AU; full neon GUI; state (incl. melody) persists.
 
 Native **arm64** on Apple Silicon (no Rosetta). Remaining release work (needs
@@ -63,8 +65,24 @@ one (option c) first.
 - **JUCE 8** — under its own license (see the JUCE license terms).
 - **ONNX Runtime** (MIT), **Piper** inference + **piper-phonemize** (MIT).
 - **espeak-ng** (GPLv3).
-- **Voice models** (`Resources/voices/*.onnx`) are **not** committed to this repo
-  (see `.gitignore`). Each Piper voice model carries its own license tied to its
-  training dataset — **verify each model's license before redistributing it**
-  (e.g. inside a binary installer). Download voices from the upstream Piper voices
-  release, or drop your own into `~/Documents/Vocalizer/Voices/`.
+- **Voice models** — five bundled Piper voices, all trained on **public-domain**
+  recordings so they can be redistributed (checked against each upstream
+  MODEL_CARD, 2026-10-07; full credits in
+  [`Resources/voices/VOICES.txt`](Resources/voices/VOICES.txt), which ships
+  inside the plug-in bundle):
+
+  | Preset | Model | Dataset | Licence |
+  |---|---|---|---|
+  | **CORI (UK)** (default), CORI ROBOT | `en_GB-cori-medium` | LibriVox | public domain |
+  | LJ (US) | `en_US-ljspeech-medium` | LJ Speech | public domain |
+  | KRISTIN (US) | `en_US-kristin-medium` | LibriVox | public domain |
+  | NORMAN (US) | `en_US-norman-medium` | LibriVox | public domain |
+  | JOHN (US) | `en_US-john-medium` | LibriVox | public domain |
+
+  The model files are **not** committed (see `.gitignore`); fetch them into
+  `Resources/voices/` from https://huggingface.co/rhasspy/piper-voices
+  (`en/<locale>/<name>/medium/<file>.onnx` + `.onnx.json`). Earlier builds
+  shipped lessac, ryan, hfc_female, alan and amy — their datasets are
+  research-only / non-commercial / all-rights-reserved, so they were removed;
+  sessions that used them now load with CORI. You can drop your own Piper
+  voices into `~/Documents/Vocalizer/Voices/` (check their licences yourself).
