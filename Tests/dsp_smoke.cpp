@@ -206,6 +206,70 @@ int main()
         check (std::abs (a - 64.0f) < 0.5f && std::abs (b - 62.0f) < 0.5f, msg);
     }
 
+    // --- Test 4: SCALE-SNAP survives SPEED > 0 (audit 2026-10-08 HIGH) --------
+    // Words = voiced vowels at off-scale pitches separated by silent gaps. The
+    // glide used to run toward MIDI 0 through every unvoiced sample, so each word
+    // scooped up from far below and only ~half the voiced frames sat on the scale.
+    std::printf ("== scale-snap with SPEED 20 ms (words separated by pauses) ==\n");
+    {
+        const float wordMidi[] = { 57.4f, 60.6f, 64.4f, 62.5f, 59.3f, 65.6f, 61.4f, 58.6f };
+        const double wordSec = 0.16, gapSec = 0.07;
+        juce::AudioBuffer<float> src (1, (int) (SR * (wordSec + gapSec) * 8 + SR * 0.1));
+        src.clear();
+        int pos = (int) (SR * 0.05);
+        for (float wm : wordMidi)
+        {
+            auto w = makeVowel (PitchCorrector::midiToHz (wm), wordSec);
+            const int L = w.getNumSamples(), fade = (int) (SR * 0.005);
+            for (int i = 0; i < L; ++i)
+            {
+                const float g = std::min (1.0f, (float) std::min (i, L - 1 - i) / (float) fade);
+                src.setSample (0, pos + i, w.getSample (0, i) * g);
+            }
+            pos += L + (int) (SR * gapSec);
+        }
+
+        PitchCorrector::Params p; p.mode = 1; p.key = 0; p.scale = 1; p.retuneSpeedMs = 20.0f;
+        auto out = PitchCorrector::process (src, SR, Melody{}, p);
+
+        auto c = PitchTracker::analyze (out.getReadPointer (0), out.getNumSamples(), SR);
+        const int cmaj[] = { 0, 2, 4, 5, 7, 9, 11 };
+        int voicedN = 0, onScale = 0;
+        for (float f : c.f0)
+        {
+            if (f <= 0.0f) continue;
+            ++voicedN;
+            const float m = PitchCorrector::hzToMidi (f);
+            const int   r = (int) std::lround (m);
+            const bool inScale = std::find (std::begin (cmaj), std::end (cmaj), ((r % 12) + 12) % 12) != std::end (cmaj);
+            if (inScale && std::abs (m - (float) r) <= 0.25f) ++onScale;
+        }
+        const float pct = voicedN > 0 ? 100.0f * (float) onScale / (float) voicedN : 0.0f;
+        char msg[160];
+        std::snprintf (msg, sizeof msg, "C major, SPEED 20 ms: %.1f%% of %d voiced frames within 25 c of the scale (want >= 85%%)",
+                       pct, voicedN);
+        check (voicedN > 20 && pct >= 85.0f, msg);
+    }
+
+    // --- Test 5: large downward retunes land (audit 2026-10-08 HIGH) -------------
+    // A G3 voice sent an octave (G2), an octave + semitone (F#2) and ~1.6 octaves
+    // (C2) down used to come back at G3: grains of half-length max(Pa, Ps) re-
+    // stitched the source when Ps ~ k * Pa. Up-shifts must stay exact.
+    std::printf ("== large down-shifts (source G3 196 Hz) ==\n");
+    for (int note : { 43, 42, 36, 48, 62, 67 })
+    {
+        auto src = makeVowel (PitchCorrector::midiToHz (55.0f), 1.2);
+        Melody m; m.durationSec = 1.2;
+        m.notes.push_back ({ 0.0, 1.2, note });
+        PitchCorrector::Params p; p.mode = 0; p.strength = 1.0f; p.retuneSpeedMs = 0.0f;
+        auto out = PitchCorrector::process (src, SR, m, p);
+        const float got = medianF0 (out);
+        const float cents = got > 0.0f ? 100.0f * (PitchCorrector::hzToMidi (got) - (float) note) : 9999.0f;
+        char msg[160];
+        std::snprintf (msg, sizeof msg, "G3 -> note %d: measured %.1f Hz (%+.0f c, want within +-20)", note, got, cents);
+        check (std::abs (cents) <= 20.0f, msg);
+    }
+
     std::printf ("\n%s (%d failure%s)\n", fails == 0 ? "ALL PASS" : "FAILURES", fails, fails == 1 ? "" : "s");
     return fails == 0 ? 0 : 1;
 }

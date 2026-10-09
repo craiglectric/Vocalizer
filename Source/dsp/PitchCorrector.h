@@ -15,7 +15,8 @@
 // the grains partway so the formants follow the pitch shift (§4.4).
 //
 // `strength` blends corrected vs original pitch (in the log/MIDI domain);
-// `retuneSpeedMs` glides the target (0 = hard snap → robotic).
+// `retuneSpeedMs` glides the target: the time to land on a new note (one-pole,
+// time constant = SPEED / 4; 0 = hard snap → robotic).
 //==============================================================================
 class PitchCorrector
 {

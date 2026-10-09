@@ -3,6 +3,9 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <limits>
+
+namespace { constexpr float kSnapResetGapSec = 0.05f; }   // SCALE-SNAP: pause that restarts the glide
 
 //==============================================================================
 float PitchCorrector::midiToHz (float midi)
@@ -103,6 +106,7 @@ juce::AudioBuffer<float> PitchCorrector::process (const juce::AudioBuffer<float>
     std::vector<float> srcMidi ((size_t) outN, 0.0f);
     std::vector<float> tgtMidi ((size_t) outN, 0.0f);
     std::vector<char>  voiced  ((size_t) outN, 0);
+    std::vector<char>  hasTarget ((size_t) outN, 1);
 
     float lastTarget = -1.0f;
 
@@ -128,18 +132,61 @@ juce::AudioBuffer<float> PitchCorrector::process (const juce::AudioBuffer<float>
         }
 
         if (target < 0.0f)
-            target = v ? snapToScale (sMidi, params.key, params.scale) : sMidi;
+        {
+            if (v) target = snapToScale (sMidi, params.key, params.scale);
+            else   hasTarget[(size_t) n] = 0;    // filled in step 3b
+        }
 
         tgtMidi[(size_t) n] = target;
     }
 
-    // 4) Glide: one-pole smooth the target in the MIDI domain (0 ms = hard snap).
-    if (params.retuneSpeedMs > 0.5f && outN > 0)
+    // 3b) Unvoiced samples carry no pitch, so their target is meaningless (it was
+    //     the source MIDI = 0). Hold the last voiced target through them (and the
+    //     first voiced target before the first voiced sample) so the glide below
+    //     runs between voiced targets instead of decaying toward MIDI 0 on every
+    //     consonant/pause — that made every word onset scoop up from far below
+    //     and wrecked SCALE-SNAP at any SPEED > 0. Unvoiced grains ignore the
+    //     target anyway (step 5 only retunes voiced samples).
     {
-        const float a = std::exp (-1.0f / ((params.retuneSpeedMs * 0.001f) * (float) sr));
-        float s = tgtMidi[0];
+        float held = -1.0f;
+        int   first = -1;
         for (int n = 0; n < outN; ++n)
         {
+            if (hasTarget[(size_t) n]) { held = tgtMidi[(size_t) n]; if (first < 0) first = n; }
+            else if (held >= 0.0f)     tgtMidi[(size_t) n] = held;
+        }
+        // Leading stretch with no target yet: take the first real one.
+        for (int n = 0; first > 0 && n < first; ++n)
+            tgtMidi[(size_t) n] = tgtMidi[(size_t) first];
+    }
+
+    // 4) Glide: one-pole smooth the target in the MIDI domain (0 ms = hard snap).
+    //    SPEED is a time-to-note: the time constant is SPEED / 4, so the glide
+    //    covers ~98 % of any interval within SPEED ms (a 3-semitone jump lands
+    //    inside 25 cents). It used to be the time constant itself, so 20 ms took
+    //    ~50 ms to land and 500 ms never reached a short note.
+    if (params.retuneSpeedMs > 0.5f && outN > 0)
+    {
+        constexpr float kTimeConstantsPerSpeed = 4.0f;
+        const float tauSec = (params.retuneSpeedMs * 0.001f) / kTimeConstantsPerSpeed;
+        const float a = std::exp (-1.0f / (tauSec * (float) sr));
+        // SCALE-SNAP: a voiced run that starts after a real pause (a word
+        // boundary, not a short consonant) starts ON its snapped note instead of
+        // gliding in from the previous word's note; within a run, and across
+        // short unvoiced gaps, the target still glides. (MIDI-follow keeps the
+        // glide across pauses: there the target is the melody note.)
+        const int resetGap = useMelody ? std::numeric_limits<int>::max()
+                                       : (int) (kSnapResetGapSec * sr);
+        float s = tgtMidi[0];
+        int unvoicedRun = 0;
+        for (int n = 0; n < outN; ++n)
+        {
+            if (! voiced[(size_t) n]) ++unvoicedRun;
+            else
+            {
+                if (unvoicedRun >= resetGap) s = tgtMidi[(size_t) n];
+                unvoicedRun = 0;
+            }
             s = a * s + (1.0f - a) * tgtMidi[(size_t) n];
             tgtMidi[(size_t) n] = s;
         }
@@ -212,8 +259,17 @@ juce::AudioBuffer<float> PitchCorrector::process (const juce::AudioBuffer<float>
                 Ps = std::clamp ((double) sr / effHz, (double) minP, (double) (2 * maxP));
         }
 
-        const int half = std::clamp ((int) std::ceil (std::max ((double) Pa, Ps)),
-                                     minP, 3 * maxP);
+        // Grain half-length = the ANALYSIS period (classic TD-PSOLA: each grain
+        // is two source periods centred on a mark). It used to be max(Pa, Ps):
+        // for down-shifts the grains then spanned several source periods and,
+        // with the window-sum normalisation below, the overlap-add simply
+        // re-stitched the source — at Ps ~ k*Pa (an octave or two down) the
+        // output came back at the ORIGINAL pitch. With half = Pa each output
+        // period holds one source pulse, so the output period is Ps.
+        const int half = std::clamp (Pa, minP, 3 * maxP);
+        // Spreading the same pulses further apart lowers the energy by Pa/Ps;
+        // sqrt(Ps/Pa) keeps a down-shifted voice at the level of the source.
+        const float downGain = Ps > (double) Pa ? (float) std::sqrt (Ps / (double) Pa) : 1.0f;
 
         // Formant factor: 1 = grain copied as-is (formants preserved); otherwise
         // the grain is read at rate rf, which scales its spectral envelope by rf.
@@ -249,6 +305,7 @@ juce::AudioBuffer<float> PitchCorrector::process (const juce::AudioBuffer<float>
             }
 
             const float w = 0.5f * (1.0f + std::cos (juce::MathConstants<float>::pi * (float) j / (float) half));
+            s *= downGain;
             acc[(size_t) out]  += s * w;
             norm[(size_t) out] += w;
         }
@@ -256,10 +313,15 @@ juce::AudioBuffer<float> PitchCorrector::process (const juce::AudioBuffer<float>
         tS += Ps;
     }
 
-    // 6) Normalize OLA and write out.
+    // 6) Normalize OLA and write out. Where grains overlap (up-shifts, unvoiced,
+    //    natural pitch) the window sum is >= ~1 and dividing by it keeps the
+    //    level. Down-shifted grains (spacing Ps > half = Pa) leave dips
+    //    between them; those dips ARE the lower pitch, so the divisor is floored
+    //    at 1 there instead of dividing the window back out (which rebuilt the
+    //    source waveform and its pitch).
     float* y = output.getWritePointer (0);
     for (int n = 0; n < outN; ++n)
-        y[n] = norm[(size_t) n] > 1.0e-6f ? acc[(size_t) n] / norm[(size_t) n] : 0.0f;
+        y[n] = norm[(size_t) n] > 1.0e-6f ? acc[(size_t) n] / std::max (1.0f, norm[(size_t) n]) : 0.0f;
 
     return output;
 }
